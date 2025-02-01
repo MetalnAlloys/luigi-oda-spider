@@ -1,0 +1,10 @@
+*.pyc
+env
+build
+dist
+*.egg-info
+.DS_Store
+*~
+.eggs
+MANIFEST
+
