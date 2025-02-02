@@ -21,4 +21,5 @@ OR run using
 - Run: `docker run --rm -it -v data:/data -e DATA_DIR=/data luigi-oda-crawler:0.0.1`
 
 
-In both cases, the a current dir. named data will be populated with scraped data e.g. `data/<target-name>/<categories>/<prices.csv>`
+In both cases, the a current dir. named data will be populated with scraped data as the following structure: `data/<target-name>/<categories>/<prices.csv>`
+In the example case, it should be something like: `data/oda/1283-meieri-ost-og-egg/142-ost.csv`
