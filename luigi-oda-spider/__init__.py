@@ -6,8 +6,15 @@ import os
 from bs4 import BeautifulSoup
 import luigi
 import luigi.contrib.opener
-import luigi.local_target
+from urllib.parse import urlparse
+import yaml
+import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+import urllib.robotparser
 
+
+DATA_DIR = os.environ.get("DATA_DIR", "/tmp/data")
 
 def strnow():
     return datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S.%f")
@@ -21,25 +28,57 @@ def calc_price(price_str):
         return "0.00"
 
 
-def get_links_to_crawl(base_url):
-    url_to_start = "/products/"
-    sub_search_keyword = "categories"
 
-    # e.g.  https://oda.com/no/products/
-    url_start = base_url + url_to_start
+class GetLinksToCrawl(luigi.Task):
+    """
+    Get links to crawl
+    """
+    base_url = luigi.Parameter()
+    urls_file = luigi.Parameter()
 
-    response = requests.get(url_start)
-    soup = BeautifulSoup(response.content, 'html.parser')
 
-    # Avoiding dupicates
-    urls = set()
+    def output(self):
+        return luigi.LocalTarget(self.urls_file)
 
-    for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(sub_search_keyword))}):
-        urls.add(link.get('href'))
+    def run(self):
+        uri_path = "/products"
+        uri_subpath = "/categories"
+        url_start = str(self.base_url) + uri_path
 
-    with open("urls.txt", "w") as f:
-        for link in urls:
-            f.write(link + '\n')
+        # Use exp. backoff
+        # backoff_factor * (2 ** (current_number_of_retries - 1))
+        try:
+            retry = Retry(
+                total=5,
+                backoff_factor=2,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+
+            adapter = HTTPAdapter(max_retries=retry)
+            session = requests.Session()
+
+            session.mount('https://', adapter)
+            headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
+
+            r = session.get(url_start, headers=headers, timeout=30)
+            #print(r.status_code)
+
+            soup = BeautifulSoup(r.content, 'html.parser')
+
+            # Avoiding dupicates
+            urls = set()
+
+            for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
+                urls.add(link.get('href'))
+
+            with self.output().open("w") as f:
+                for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
+                    urls.add(link.get('href'))
+                for url in urls:
+                    f.write(url + '\n')
+
+        except Exception as e:
+            print(e)
 
 
 
@@ -47,113 +86,154 @@ class GetProducts(luigi.Task):
     """
     Extract the Oda product catalogue
     """
+    target_name = luigi.Parameter()
+    retry_on_error = luigi.Parameter(default=False)
+    base_url = luigi.Parameter()
+    #uri_path = luigi.Parameter()
+    # sub_uri_path = luigi.Parameter(default="categories")
 
-    name = luigi.Parameter()
+    def datadir(self):
+        return luigi.LocalTarget(os.path.join(DATA_DIR, str(self.target_name)))
 
-    def output(self):
-        return luigi.contrib.opener.OpenerTarget(self.name)
 
+    def url_config_target(self):
+        return luigi.LocalTarget('%s/urls.txt' % (self.datadir().path))
+
+
+    def requires(self):
+        # return luigi.task.externalize(GetLinksToCrawl( urls_file=self.url_config_target().path, base_url = self.base_url))
+        return GetLinksToCrawl( urls_file=self.url_config_target().path, base_url = self.base_url)
+
+    
     def run(self):
         links_visited = list()
 
-        with open("urls.txt") as urls:
+        logger = logging.getLogger('luigi-interface')
+        logger.info("Running --> Agg.Task")
+
+        with open(self.url_config_target().path) as urls:
             for url in urls:
                 # Extra measure to not overload the server
+                url = url.strip()
                 if url in links_visited:
                     print("Already visited: {}".format(url))
                     continue
 
                 print("[+] Scraping: {}".format(url))
 
-                response = requests.get(url)
-                soup = BeautifulSoup(response.content, 'html.parser')
+                try:
+                    retry = Retry(
+                        total=2,
+                        backoff_factor=2,
+                        status_forcelist=[429, 500, 502, 503, 504],
+                    )
 
-                suffix = url.strip("/").split("/")[-1] # e.g. 391-salat-og-kal
+                    adapter = HTTPAdapter(max_retries=retry)
+                    session = requests.Session()
 
-                uri_set = set()
+                    session.mount('https://', adapter)
+                    headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
 
-                # exclude http[s]
-                # for uri in soup.find_all('a', attrs={'href': re.compile(r"^(?!(https)).*")}):
+                    r = session.get(url, headers=headers, timeout=60)
 
-                for uri in soup.find_all('a', attrs={'href': re.compile(suffix)}):
-                    href = uri.get("href")
-                    if href == url or "?filters=" in href or re.search(r"{}/$".format(suffix), href):
-                        continue
-                    uri_set.add(uri.get("href"))
-                
-                # handle pagination (load more button).
-                # Note: Unable to figure out how many pages to crawl, so
-                # setting the limit to 10
-                for i in range(1, 10):
-                    for uri in uri_set:
-                        # Flag the item as "Utsolgt for later use" 
-                        Utsolgt = False
+                    soup = BeautifulSoup(r.content, 'html.parser')
+                    suffix = url.strip("/").split("/")[-1] # e.g. 391-salat-og-kal
 
-                        main_url = "https://oda.com" + uri + f'?cursor={i}'
+                    uri_set = set()
 
-                        print("Crawling: {}".format(main_url))
+                    # Alternatively trying to exclude all https urls e.g. 
+                    # for uri in soup.find_all('a', attrs={'href': re.compile(r"^(?!(https)).*")}):
+                    for uri in soup.find_all('a', attrs={'href': re.compile(suffix)}):
+                        href = uri.get("href")
+                        if href == url or "?filters=" in href or re.search(r"{}/$".format(suffix), href):
+                            continue
+                        uri_set.add(uri.get("href"))
 
-                        response = requests.get(main_url)
-                            
-                        soup = BeautifulSoup(response.content, 'html.parser')
 
-                        # Using the <article> tag in HTML source code. I am
-                        # sure there are better ways
+                    # handle pagination (load more button).
+                    # Note: Unable to figure out how many pages to crawl, so
+                    # setting the limit to 
+                    for i in range(1, 5):
+                        for uri in uri_set:
+                            # Flag the item as "Utsolgt for later use" 
+                            Utsolgt = False
 
-                        articles = soup.find_all("article")
+                            main_url = "https://oda.com" + uri + f'?cursor={i}'
+                            print("[+] Crawling: {}".format(main_url))
 
-                        for article in articles:
-                            data = []
+                            response = session.get(main_url)
+                                
+                            soup = BeautifulSoup(response.content, 'html.parser')
 
-                            # Use this to avoid parsing <articles> that do not
-                            # have product info e.g. warnings and notification
-                            # messages. Searching for the "styles__" string
-                            filtered_values = list(filter(lambda v: re.match('^styles', v), article["class"]))
-                            if len(filtered_values) == 0:
-                                continue
-                            item_name = article.h2.text
+                            # Using the <article> tag in HTML source code. I am
+                            # sure there are better ways
+                            articles = soup.find_all("article")
 
-                            price_str = article.find_all("span")[1].get_text(strip=True)
+                            for article in articles:
+                                data = []
+                                # Use this to avoid parsing <articles> that do not have product info e.g. warnings and notification
+                                # messages. Searching for the "styles__" string
+                                filtered_values = list(filter(lambda v: re.match('^styles', v), article["class"]))
+                                if len(filtered_values) == 0:
+                                    continue
+                                item_name = article.h2.text
 
-                            price = ""
-                            if price_str == "Utsolgt":
-                                Utsolgt = True
-                                price = article.find_all("span")[2].get_text(strip=True)
-                            else:
-                                price = calc_price(price_str)
+                                price_str = article.find_all("span")[1].get_text(strip=True)
 
-                            # print(f"Extracted price: {price_str}")
-                            # print(f"Calculated price: {price}")
-                            # print("Item: {}, price: {}".format(item_name, price))
+                                price = ""
+                                if price_str == "Utsolgt":
+                                    Utsolgt = True
+                                    price = article.find_all("span")[2].get_text(strip=True)
+                                else:
+                                    price = calc_price(price_str)
 
-                            # Convert the Extracted price to float for CSV file
-                            # Better done using pandas library. Just a hack right now
-                            floatprice = 0.0
-                            try:
-                                floatprice = float(price.replace(',', '.'))
-                            except ValueError:
-                                floatprice = 0.00
+                                # print(f"Extracted price: {price_str}")
+                                # print(f"Calculated price: {price}")
+                                # print("Item: {}, price: {}".format(item_name, price))
 
-                            data.append({'item': item_name, 'price': floatprice, 'status': "Utsolgt" if Utsolgt else "Tilgjengelig"})
+                                # Convert the Extracted price to float for CSV file
+                                # Better done using pandas library. Just a hack right now
 
-                            data_store = f"data/{suffix}"
-                            if not os.path.exists(data_store):
-                                os.makedirs(data_store)
+                                floatprice = 0.0
+                                try:
+                                    floatprice = float(price.replace(',', '.'))
+                                except ValueError:
+                                    floatprice = 0.00
 
-                            filename = main_url.rsplit("/", 1)[0].split("/")[-1] + ".csv"
-                            full_filepath = f'{data_store}/{filename}'
+                                data.append({'item': item_name, 'price': floatprice, 'status': "Utsolgt" if Utsolgt else "Tilgjengelig"})
 
-                            with open(full_filepath, 'a', newline='') as csvfile:
-                               fieldnames = ['item', 'price', 'status']
-                               writer = csv.DictWriter(csvfile, fieldnames=fieldnames, restval=' ')
+                                data_store = os.path.join(self.datadir().path, suffix)
+                                if not os.path.exists(data_store):
+                                    os.makedirs(data_store)
 
-                               # Again, better done using pandas
-                               if csvfile.tell() == 0:
-                                   writer.writeheader()
+                                # e.g. data/oda/391-salat-og-kal/
+                                filename = main_url.rsplit("/", 1)[0].split("/")[-1] + ".csv"
+                                full_filepath = os.path.join(self.datadir().path, suffix, filename)
 
-                               writer.writerows(data)
+
+                                with open(full_filepath, 'a+', newline='') as csvfile:
+                                   fieldnames = ['item', 'price', 'status']
+                                   writer = csv.DictWriter(csvfile, fieldnames=fieldnames, restval=' ')
+                                   if csvfile.tell() == 0:
+                                       writer.writeheader()
+                                   writer.writerows(data)
+
+
+                except Exception as e:
+                    print(e)
+
 
                 links_visited.append(url)
+
+        with self.output().open("w") as f:
+            f.write("DONE")
+
+                
+
+    def output(self):
+         return luigi.LocalTarget('%s/DONE' % (self.datadir().path))
+
+
 
 
 
