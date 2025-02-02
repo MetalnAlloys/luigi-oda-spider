@@ -49,18 +49,23 @@ for url in urls:
             continue
         uri_set.add(uri.get("href"))
 
+    for uri in uri_set:
+        print(uri)
+
+    print("----------")
+
     # handle pagination (load more). Unable to figure out how many pages to crwal
 
     for i in range(1, 10):
         for uri in uri_set:
             Utsolgt = False
-            #print("[++] Scraping Page index {}".format(i))
+            print("[++] Scraping Page index {}".format(i))
             main_url = "https://oda.com" + uri + f'?cursor={i}'
 
             print("Crawling: {}".format(main_url))
 
             response = requests.get(main_url)
-                
+               
             soup = BeautifulSoup(response.content, 'html.parser')
             articles = soup.find_all("article")
 
@@ -80,15 +85,16 @@ for url in urls:
                 else:
                     price = calc_price(price_str)
 
-                # print(f"Extracted price: {price_str}")
-                # print(f"Calculated price: {price}")
-                # print("Item: {}, price: {}".format(item_name, price))
+                print(f"Extracted price: {price_str}")
+                print(f"Calculated price: {price}")
+                print("Item: {}, price: {}".format(item_name, price))
 
                 floatprice = 0.0
                 try:
                     floatprice = float(price.replace(',', '.'))
                 except ValueError:
                     floatprice = 0.0
+
 
                 #print(f"Float: {floatprice}")
                 data.append({'item': item_name, 'price': floatprice, 'status': "Utsolgt" if Utsolgt else "Tilgjengelig"})
@@ -104,11 +110,12 @@ for url in urls:
                    fieldnames = ['item', 'price', 'status']
                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames, restval=' ')
                    if csvfile.tell() == 0:
-                       writer.writeheader()
+                      writer.writeheader()
                    writer.writerows(data)
 
 
     links_visited.append(url)
+    print(links_visited)
 
     print("==================")
 
