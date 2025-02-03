@@ -31,7 +31,7 @@ def calc_price(price_str):
 
 class GetLinksToCrawl(luigi.Task):
     """
-    Get links to crawl
+    Get links recursively to crawl
     """
     base_url = luigi.Parameter()
     urls_file = luigi.Parameter()
@@ -61,7 +61,6 @@ class GetLinksToCrawl(luigi.Task):
             headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
 
             r = session.get(url_start, headers=headers, timeout=30)
-            #print(r.status_code)
 
             soup = BeautifulSoup(r.content, 'html.parser')
 
