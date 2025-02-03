@@ -45,19 +45,17 @@ class GetLinksToCrawl(luigi.Task):
         uri_subpath = "/categories"
         url_start = str(self.base_url) + uri_path
 
-        # Use exp. backoff
-        # backoff_factor * (2 ** (current_number_of_retries - 1))
         try:
             retry = Retry(
-                total=5,
-                backoff_factor=2,
-                status_forcelist=[429, 500, 502, 503, 504],
+                total=5, # total no. retries allowed
+                backoff_factor=2, # sleep fpr backoff_factor * (2 ** (current_number_of_retries - 1))
+                status_forcelist=[429, 500, 502, 503, 504], # retry on these
             )
 
-            adapter = HTTPAdapter(max_retries=retry)
-            session = requests.Session()
+            adapter = HTTPAdapter(max_retries=retry) 
+            session = requests.Session() # try to use the same session for subsequent requests
 
-            session.mount('https://', adapter)
+            session.mount('https://', adapter) # only https for now
             headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
 
             r = session.get(url_start, headers=headers, timeout=30)
@@ -67,8 +65,8 @@ class GetLinksToCrawl(luigi.Task):
             # Avoiding dupicates
             urls = set()
 
-            for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
-                urls.add(link.get('href'))
+            # for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
+            #     urls.add(link.get('href'))
 
             with self.output().open("w") as f:
                 for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
