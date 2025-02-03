@@ -1,0 +1,9 @@
+task:
+  name: GetProducts
+  module: luigi-oda-crawler
+  base-url: https://oda.com/no
+  uri-path: "/products"
+  uri-subpath: "/categories"
+
+variables:
+  DATA_DIR: "./data"
