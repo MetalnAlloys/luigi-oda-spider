@@ -33,51 +33,84 @@ class GetLinksToCrawl(luigi.Task):
     """
     Get links recursively to crawl
     """
-    base_url = luigi.Parameter()
-    urls_file = luigi.Parameter()
+    # base_url = luigi.Parameter()
+    #urls_file = luigi.Parameter()
+    path = luigi.Parameter()
+    target_name = luigi.Parameter()
+
+
+    def datadir(self):
+        # data/odax
+        return luigi.LocalTarget(os.path.join(DATA_DIR, str(self.target_name)))
 
 
     def output(self):
-        return luigi.LocalTarget(self.urls_file)
+        # data/odax/urs.txt
+        return luigi.LocalTarget('%s/urls.txt' % (self.datadir().path))
+
+
 
     def run(self):
-        uri_path = "/products"
-        uri_subpath = "/categories"
-        url_start = str(self.base_url) + uri_path
+        src = '%s.config.yaml' % (self.path,) 
+        fs = self.output().fs
 
-        # Use exp. backoff
-        # backoff_factor * (2 ** (current_number_of_retries - 1))
         try:
-            retry = Retry(
-                total=5,
-                backoff_factor=2,
-                status_forcelist=[429, 500, 502, 503, 504],
-            )
+            cfg = luigi.LocalTarget('%s.config.yaml' % (self.target_name,)) # example
+            try:
+                with cfg.open("r") as f:
+                    task = yaml.load(f, Loader=yaml.SafeLoader)
+            except:
+                if not cfg.fs.exists(cfg.path):
+                    return
+                raise
+            print("Config file loaded")
 
-            adapter = HTTPAdapter(max_retries=retry)
-            session = requests.Session()
+            task_args = dict(task.get("task", {}))
+        
+            base_url = task_args["base-url"]
+            uri_path = task_args["uri-path"]
+            uri_subpath = task_args["uri-subpath"]
+            # uri_subpath = "/categories"
+            url_start = base_url + uri_path
 
-            session.mount('https://', adapter)
-            headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
+            # Use exp. backoff
+            # backoff_factor * (2 ** (current_number_of_retries - 1))
+            try:
+                retry = Retry(
+                    total=5,
+                    backoff_factor=2,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                )
 
-            r = session.get(url_start, headers=headers, timeout=30)
+                adapter = HTTPAdapter(max_retries=retry)
+                session = requests.Session()
 
-            soup = BeautifulSoup(r.content, 'html.parser')
+                session.mount('https://', adapter)
+                headers = {'User-Agent': 'Oda test crawler bot. Contact ali.scmenust@gmail.com'}
 
-            # Avoiding dupicates
-            urls = set()
+                r = session.get(url_start, headers=headers, timeout=30)
 
-            for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
-                urls.add(link.get('href'))
+                soup = BeautifulSoup(r.content, 'html.parser')
 
-            with self.output().open("w") as f:
+                # Avoiding dupicates
+                urls = set()
+
                 for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
                     urls.add(link.get('href'))
-                for url in urls:
-                    f.write(url + '\n')
+
+                with self.output().open("w") as f:
+                    for link in soup.find_all('a', attrs={'href': re.compile(r"^https://.*{}.*".format(uri_subpath))}):
+                        urls.add(link.get('href'))
+                    # Just for readability
+                    for url in urls:
+                        f.write(url + '\n')
+
+            except Exception as e:
+                print(e)
 
         except Exception as e:
-            print(e)
+            print("Task failed!: %s" % e)
+
 
 
 
@@ -87,7 +120,7 @@ class GetProducts(luigi.Task):
     """
     target_name = luigi.Parameter()
     retry_on_error = luigi.Parameter(default=False)
-    base_url = luigi.Parameter()
+    path = luigi.Parameter()
     #uri_path = luigi.Parameter()
     # sub_uri_path = luigi.Parameter(default="categories")
 
@@ -101,7 +134,7 @@ class GetProducts(luigi.Task):
 
     def requires(self):
         # return luigi.task.externalize(GetLinksToCrawl( urls_file=self.url_config_target().path, base_url = self.base_url))
-        return GetLinksToCrawl( urls_file=self.url_config_target().path, base_url = self.base_url)
+        return GetLinksToCrawl(path=self.path, target_name=self.target_name)
 
     
     def run(self):
