@@ -5,7 +5,7 @@ import setuptools
 setuptools.setup(
     name='luigi-oda-spider',
     version='0.0.1',
-    description='Task trigger for Crawling Oda products',
+    description='Luigi Task trigger for Crawling Oda products',
     long_description=''' ''',
     long_description_content_type="text/markdown",
     author='Ali Humayun',
